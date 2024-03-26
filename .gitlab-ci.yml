@@ -1,0 +1,103 @@
+stages:
+  - build
+  - test
+  - deploy
+  - stop
+  - stop previous jobs
+
+variables:
+  IMAGE_TAG: $CI_COMMIT_BRANCH-$CI_COMMIT_SHORT_SHA
+
+image: alpine
+
+build-job:
+  stage: build
+  script:
+    - echo "Hello, $GITLAB_USER_LOGIN!"
+    - echo one >> house.txt 
+  artifacts:
+    paths:
+      - house.txt
+    expire_in: 30 days
+
+include:
+  - local: '/local.gitlab-ci.yml'
+  - remote: 'https://gitlab.com/KirillKotikov/remote_project/-/raw/main/remote.gitlab-ci.yml'
+  - remote: 'https://gitlab.com/bayonetx/ci-cd-2023-11-20/-/raw/main/smoke.gotlab-ci.yml'
+  - project: 'KirillKotikov/remote_project'
+    ref: main
+    file: 
+      - 'remote.gitlab-ci.yml'
+
+
+docker build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker login -u $GITLAB_CI_USER -p $GITLAB_CI_PASSWORD $CI_REGISTRY
+    - echo $GITLAB_CI_USER $GITLAB_CI_PASSWORD $CI_REGISTRY $CI_REGISTRY_IMAGE:$IMAGE_TAG
+    - docker build -t $CI_REGISTRY_IMAGE:$IMAGE_TAG .
+    - docker push $CI_REGISTRY_IMAGE:$IMAGE_TAG
+
+test-job1:
+  stage: test
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker login -u $GITLAB_CI_USER -p $GITLAB_CI_PASSWORD $CI_REGISTRY
+    - docker pull $CI_REGISTRY_IMAGE:$IMAGE_TAG
+    - docker run $CI_REGISTRY_IMAGE:$IMAGE_TAG
+
+test-job2:
+  stage: test
+  script:
+    - echo "This job tests something, but takes more time than test-job1."
+    - echo "After the echo commands complete, it runs the sleep command for 20 seconds"
+    - echo "which simulates a test that runs 20 seconds longer than test-job1"
+    - grep one house.txt
+    - sleep 30
+
+job to stop branch:
+  stage: stop previous jobs
+  image: everpeace/curl-jq
+  script:
+    - |
+      if [ "$CI_COMMIT_REF_NAME" == "main" ] 
+        then
+          (
+            echo "Cancel old pipelines from the same branch except last"
+            OLD_PIPELINES=$(curl -s -H "PRIVATE_TOKEN: $ACCESS_MY_API" "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/pipelines?ref=${CI_COMMIT_REF_NAME}&status=running" \
+              | jq '.[] | .id' | tail -n +2 )
+              for pipeline in ${OLD_PIPELINES}; \
+                do echo "Killing ${pipeline}" && \
+                  curl -s --request POST -H "PRIVATE-TOKEN: $ACCESS_MY_API" "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/pipelines/${pipeline}/cancel"; done
+          ) || echo "Canceling old pipelines (${OLD_PIPELINES}) failed"
+      fi
+
+deploy to preprod:
+  stage: deploy
+  variables:
+    MyLogin: preprod
+  script:
+    - echo "Do you deploy here to ${MyLogin}"
+    - echo ${MyPassword}
+  only:
+    - main
+  environment:
+    name: preprod
+
+deploy to production:
+  stage: deploy
+  variables:
+    MyLogin: production
+  script:
+    - echo "Do you deploy here to ${MyLogin}"
+    - echo ${MyPassword}
+  only:
+    - main
+  when: manual
+  environment:
+    name: production

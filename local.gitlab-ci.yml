@@ -1,0 +1,2 @@
+local file job:
+    script: echo "This is job from local file"
